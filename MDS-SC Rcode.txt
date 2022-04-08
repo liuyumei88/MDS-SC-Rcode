@@ -1,0 +1,337 @@
+# 1.0 Load libraries
+import scanpy as sc
+import numpy as np
+import pandas as pd
+import os, sys
+import anndata
+import collections
+import importlib
+import logging
+import itertools
+from scipy.sparse import issparse
+import matplotlib.pyplot as plt
+import seaborn as sns
+hostDir = 'analysis/'
+sys.path.append(os.path.join(hostDir, 'src'))
+import operations
+import plots
+import configparser
+config = configparser.ConfigParser() 
+config.read(os.path.join(hostDir, 'src/config.ini'))
+import matplotlib as mpl
+from copy import copy
+import rpy2.robjects as ro
+reds = copy(mpl.cm.Reds)
+reds.set_under("lightgray")
+
+# 2.0 Functions
+def gene_umaps(anndataObj, genes, outPath):
+    for gene in genes:
+        if gene in anndataObj.var.index:
+            fig, ax = plt.subplots(figsize=(5, 5))
+            sc.pl.umap(anndataObj, color=gene, size=5, add_outline=False, cmap=reds,  vmin=0.00001, ax=ax)
+            fig.savefig(f'{outPath}/{gene}.pdf')
+
+def gene_violin(anndataObj, genes, clusterName, outPath):
+    for gene in genes:
+        if gene in anndataObj.var.index:
+            fig, ax = plt.subplots(figsize=(5, 5))
+            sc.pl.violin(anndataObj, keys=gene, groupby=clusterName, stripplot=False, ax=ax, rotation=45)
+            fig.savefig(f'{outPath}/{gene}.pdf')
+
+# 3.0 Samples
+control = ['B', 'C', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'Q', 'R', 'S', 'T', 'U', 'W']
+patient = ['patient'+ i for i in ['A', 'B', 'C', 'D', 'E', 'F', 'G']]
+samples = control + patient
+
+# 4.0 Clustering parameters
+binnarResolution, binnaryTag = 0.8, 'louvain05'
+
+# 5.0 using brain samples
+names = locals()
+for i in samples:
+    if os.path.exists(f'cellRanger/{i}'):
+        names['adata' + i] = sc.read_10x_mtx(f'cellRanger/{i}', var_names='gene_symbols', cache=True)
+        names['adata' + i].obs['sample'] = i
+
+# 6.merge all the samples
+adata = adataB.concatenate(adataC, adataE, adataF, adataG, adataH, adataJ, adataK, adataL, adataM,adataN,
+                           adataQ, adataR, adataS, adataT, adataU, adataW,adatapatientA, adatapatientB,
+                           adatapatientC, adatapatientD, adatapatientE, adatapatientF, adatapatientG
+                             )
+adata.var_names_make_unique()  # this is unnecessary if using 'gene_ids'
+adata.obs.drop(['batch'], axis=1, inplace=True)
+
+# remove doublets using scrublet, which needs a matrox whre the rows are cells and columns are genes
+# note the matrix in adata is a csr matrix (sparse matrix)
+import scrublet
+
+adata_doublets = adata.copy()
+scrub = scrublet.Scrublet(adata_doublets.X.tocsc(), expected_doublet_rate=0.06)
+doublet_scores, predicted_doublets = scrub.scrub_doublets(min_counts=2,  min_cells=3,  min_gene_variability_pctl=85,  n_prin_comps=30,
+                                                                                    mean_center=False, normalize_variance=False, log_transform=True)
+scrub.plot_histogram()
+scrub.set_embedding('UMAP', scrublet.get_umap(scrub.manifold_obs_, 10, min_dist=0.3))
+scrub.plot_embedding('UMAP', order_points=True)
+del adata_doublets 
+predicted_doublets + 0 # transcfer False and True to 0 and 1
+adata.obs['doublet'] = predicted_doublets
+print('Detect {0} doubles'.format(adata.obs.query('doublet=="1"').shape[0]))
+
+#Filter cells according to identified QC thresholds:
+print('Total number of cell: {:d}'.format(adata.shape[0]))
+sc.pp.filter_cells(adata, max_counts = 40000)
+print('Number of cells after maximum UMI filter: {:d}'.format(adata.shape[0]))
+sc.pp.filter_cells(adata, max_genes=7000)
+print('Number of cells after minimum gene filter: {:d}'.format(adata.shape[0]))
+adata = adata[adata.obs['doublet'] == 0]
+print('Number of cells after doublets filter: {:d}'.format(adata.shape[0]))
+print('Total number of genes: {:d}'.format(adata.shape[1]))
+sc.pp.filter_genes(adata, min_cells=20)
+print('Number of genes after cell filter: {:d}'.format(adata.shape[1]))
+
+# Remove batch effect
+import scanpy.external as sce
+sc.tl.pca(adata, svd_solver="arpack", use_highly_variable=True)
+sce.pp.harmony_integrate(adata, 'sample')
+sc.pp.neighbors(adata,  use_rep='X_pca_harmony', n_neighbors=50)
+
+# Remover LIN positive cells
+sc.pp.neighbors(adata,n_neighbors=30)
+sc.tl.umap(adata)
+sc.tl.louvain(adata, resolution=1, key_added='leidian1')
+outCl = ['2', '16', '1', '0', '21', '18', '13', '5', '27', '10']
+sc.pl.umap(adata[~adata.obs['leidian1'].isin(outCl)], color='leidian1', legend_loc='on data')
+adata = adata[~adata.obs['leidian1'].isin(outCl)]
+
+# Re-clustering
+sc.tl.louvain(binarySC, resolution=binnarResolution, key_added=binnaryTag)
+# merge clusters
+assignedName = {'0,0':'Granulocyte', '0,1':'Granulocyte', '0,2':'Granulocyte', '0,3':'Granulocyte',
+                '0,4':'MEP', '0,5':'MP','0,6':'MP', '0,7':'MP',
+                '1,0':'Granulocyte', '1,1':'Late Erythroblast', '1,3':'Granulocyte', '1,4':'Granulocyte', '1,2,0':'Granulocyte', '1,2,1':'Late Erythroblast',
+                '2,0':'LP', '2,2':'LP', '2,3':'Granulocyte', '2,1':'Granulocyte', 
+                '3':'Late Erythroblast', 
+                '4,0':'Late Erythroblast', '4,2':'Late Erythroblast', '4,3':'Late Erythroblast', '4,4':'Mega', '4,1':'Granulocyte',
+                '5,1':'HSC+MPP', '5,0':'MPP', '5,2,1':'Mast', '5,2,0':'Basophil',
+                '6':'Granulocyte',
+                '7':'Late Erythroblast', 
+                '8,0,0':'MP', '8,0,2':'MEP', '8,0,1':'HSC+MPP', '8,1':'CLP',
+                '9,1,0':'CFU-E', '9,1,1':'BFU-E', '9,2':'CFU-E', '9,4':'CFU-E', '9,5':'Early Erythroblast', '9,3':'Early Erythroblast', '9,0':'Early Erythroblast',
+                '10':'Granulocyte', 
+                '11':'Granulocyte',
+                '12,1':'Dis', '12,4':'Granulocyte', '12,0':'Granulocyte', '12,3':'Granulocyte', '12,5':'Granulocyte', '12,2':'Granulocyte',
+                '13,0':'DC', '13,3':'DC', '13,2':'DC', '13,1':'DC',
+                '14':'B', 
+                '15':'T', 
+               }
+binarySC.obs['assignCl1'] = (binarySC.obs['final9'].map(assignedName).astype('category'))
+
+# heatmap
+geneOrder = ['AVP', 'UCHL1', 'CRHBP', 'SPINK2', 'AZU1', 'MS4A3', 'CFD', 'ELANE', 'PRTN3', 'FCN1', 'CLEC4A',
+             'IRF8', 'CD14', 'GATA2', 'TIMP3', 'CNRIP1', 'ITGA2B', 'PF4', 'CA1', 'GATA1', 'ALAS2', 'HBA1',
+             'GYPA', 'VPREB1', 'VPREB3', 'EBF1', 'IGLL1', 'DNTT', 'CD79A', 'CD79B', 'MS4A1', 'IL32', 'IL7R',
+             'TCF7', 'ENPP3', 'CD63', 'CD69']
+
+clusterOrder = ['HSC+MPP', 'MPP', 'MP', 'Granulocyte', 'Monocytes', 'DC', 'MEP', 'Mega', 
+               'BFU-E', 'CFU-E', 'Early Erythroblast', 'Late Erythroblast', 'CLP', 'LP',
+                'B', 'T', 'Basophil', 'Mast']
+
+adata.obs['assignCl1'] = adata.obs['assignCl1'].cat.reorder_categories(clusterOrder, ordered=True)
+sc.pl.heatmap(adata, geneOrder, groupby='assignCl1', cmap='viridis',  dendrogram=False, standard_scale='obs')
+
+# Cell cycle
+sc.pp.normalize_per_cell(raw, counts_per_cell_after=1e4)
+sc.pp.log1p(adata)
+sc.pp.scale(adata)
+cell_cycle_genes = [x.strip() for x in open('data/cell_cycle_gene.txt')]
+s_genes = cell_cycle_genes[:43]
+g2m_genes = cell_cycle_genes[43:]
+cell_cycle_genes = [x for x in cell_cycle_genes if x in adata.var_names]
+sc.tl.score_genes_cell_cycle(adata, s_genes=s_genes, g2m_genes=g2m_genes)
+
+# DEGs
+diffs = {}
+for cl in adata.obs[cluster].unique():
+    subAdata= adata[adata.obs[cluster]==cl]
+    ro.globalenv['subAdata'] = subAdata
+    if pattern=='stats':
+        ro.r('sca <- SceToSingleCellAssay(subAdata, class = "SingleCellAssay")')
+        ro.r('colData(sca)$n_genes = scale(colData(sca)$n_genes)')
+        ro.r('scaFilter = sca[rowSums(assay(sca)) != 0, ]')
+        ro.r('zlmCond <- zlm(formula = ~stats + sample + n_genes, sca=scaFilter)')
+        ro.r('summaryCond <- summary(zlmCond, doLRT="statswt")')
+        summaryCond = ro.r('summaryCond$datatable')
+        tmpDf = pd.merge(summaryCond.query('contrast == "statswt" and component=="H"').loc[:, ['primerid', 'Pr(>Chisq)']], 
+                            summaryCond.query('contrast == "statswt" and component=="logFC"').loc[:, ['primerid', 'coef', 'z']],
+                            on=['primerid'], how='outer')
+
+tmpDf.rename(columns={'perimerid':'gene', 'Pr(>Chisq)':'p_value', 'coef':'logFC', 'z':'Zscore'}, inplace=True)
+diffs[cl] = p_adjust(tmpDf, pv_index=1, method='fdr')
+
+# ploting
+genes = ['SPI1', 'GATA1', 'GATA2','BCL11A', 'KLF1', 'KLF2', 'FLI1', 'SOX6', 'TAL1', 'RUNX1','MYB', 'HIF1A', 'SCL', 'FOG1']
+# violin plot
+gene_violin(adata, genes, 'assignCl1', 'figures/violin')
+# UMAP visualization
+gene_umaps(adata, genes, 'figures/umap')
+
+# Enrichment
+conditon1 = '(logFC>0.5)&(adjusted<0.05)'
+conditon2 = '(logFC<-0.5)&(adjusted<0.05)'
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=alldiffs['primerid'].tolist(), 
+                               query=alldiffs.query(conditon1)['primerid'].tolist())
+res.to_csv('GO/all2all_mast_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=alldiffs['primerid'].tolist(), 
+                               query=alldiffs.query(conditon2)['primerid'].tolist())
+res.to_csv('GO/all2all_mast_minus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mdsDiff['primerid'].tolist(), 
+                               query=mdsDiff.query(conditon1)['primerid'].tolist())
+res.to_csv('GO/MDS_vs_allNormal_mast_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mdsDiff['primerid'].tolist(), 
+                               query=mdsDiff.query(conditon2)['primerid'].tolist())
+res.to_csv('GO/MDS_vs_allNormal_mast_minus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=amlvmdsDiffs['Primerid'].tolist(), 
+                               query=amlvmdsDiffs.query(conditon1)['Primerid'].tolist())
+res.to_csv('GO/aml_vs_mds_limma_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=amlvmdsDiffs['Primerid'].tolist(), 
+                               query=amlvmdsDiffs.query(conditon2)['Primerid'].tolist())
+res.to_csv('GO/aml_vs_mds_limma_minus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=hrvdrDiffs['Primerid'].tolist(), 
+                               query=hrvdrDiffs.query(conditon1)['Primerid'].tolist())
+res.to_csv('GO/hrMDS_vs_lrMDS_limma_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=hrvdrDiffs['Primerid'].tolist(), 
+                               query=hrvdrDiffs.query(conditon2)['Primerid'].tolist())
+res.to_csv('GO/hrMDS_vs_lrMDS_limma_minus.csv')
+
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mepDiff['primerid'].tolist(), 
+                               query=mepDiff.query(conditon1)['primerid'].tolist())
+res.to_csv('GO/MEP_disease_vs_normal_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mepDiff['primerid'].tolist(), 
+                               query=mepDiff.query(conditon2)['primerid'].tolist())
+res.to_csv('GO/MEP_disease_vs_normal_minus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mpDiff['primerid'].tolist(), 
+                               query=mpDiff.query(conditon1)['primerid'].tolist())
+res.to_csv('GO/MP_disease_vs_normal_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=mpDiff['primerid'].tolist(), 
+                               query=mpDiff.query(conditon2)['primerid'].tolist())
+res.to_csv('GO/MP_disease_vs_normal_minus.csv')
+
+amlvsnormalDiffs.rename(columns={'Unnamed: 0':'primerid'}, inplace=True)
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=amlvsnormalDiffs['primerid'].tolist(), 
+                               query=amlvsnormalDiffs.query(conditon1)['primerid'].tolist())
+res.to_csv('GO/aml_vs_normal_plus.csv')
+
+gp = GProfiler(return_dataframe=True, user_agent='g:GOSt')
+res = gp.profile(organism='hsapiens', sources=[], user_threshold=0.05,
+                               significance_threshold_method='fdr', 
+                               background=amlvsnormalDiffs['primerid'].tolist(), 
+                               query=amlvsnormalDiffs.query(conditon2)['primerid'].tolist())
+res.to_csv('GO/aml_vs_normal_minus.csv')
+
+# GSEA enrichment
+import gseapy as gs
+library = 'msigdb_human/msigdb.v7.1.symbols.gmt'
+tmp = alldiffs.sort_values(['Zscore']).dropna().loc[:, ['primerid', 'Zscore']]
+pre_res = gs.prerank(rnk=tmp, gene_sets=library, processes=10, permutation_num=1000, graph_num=2000)
+tmp = mdsDiff.sort_values(['Zscore']).dropna().loc[:, ['primerid', 'Zscore']]
+pre_res = gs.prerank(rnk=tmp, gene_sets=library, processes=10, permutation_num=1000, graph_num=2000)
+tmp = mepDiff.sort_values(['Zscore']).dropna().loc[:, ['primerid', 'Zscore']]
+pre_res = gs.prerank(rnk=tmp, gene_sets=library, processes=10, permutation_num=1000, graph_num=2000)
+tmp = mpDiff.sort_values(['Zscore']).dropna().loc[:, ['primerid', 'Zscore']]
+pre_res = gs.prerank(rnk=tmp, gene_sets=library, processes=10, permutation_num=1000, graph_num=2000)
+# Trajectory analysis
+import scanpy.external as sce
+sce.tl.palantir(normal, n_components=5, knn=30)
+sc.tl.tsne(normal, n_pcs=2, use_rep='X_palantir_multiscale', perplexity=150, n_jobs=4)
+sce.tl.palantir(lrMDS, n_components=5, knn=30)
+sc.tl.tsne(lrMDS, n_pcs=2, use_rep='X_palantir_multiscale', perplexity=150, n_jobs=4)
+sce.tl.palantir(hrMDS, n_components=5, knn=30)
+sc.tl.tsne(hrMDS, n_pcs=2, use_rep='X_palantir_multiscale', perplexity=150, n_jobs=4)
+sce.tl.palantir(aml, n_components=5, knn=30)
+sc.tl.tsne(aml, n_pcs=2, use_rep='X_palantir_multiscale', perplexity=150, n_jobs=4)
+startCell = normal[normal.obs['assignCl1'] == 'HSC+MPP', 'AVP'].to_df().sort_values(['AVP'], ascending=False).head(1).index[0]
+ery = normal[normal.obs['assignCl1'] == 'Late Erythroblast', 'GYPA'].to_df().sort_values(['GYPA'], ascending=False).head(1).index[0]
+terminal_states = pd.Series(['Late Erythroblast'], index=[ery])
+pr_res = sce.tl.palantir_results(normal, early_cell=startCell, 
+                                 ms_data='X_palantir_multiscale', num_waypoints=500, 
+                                 terminal_states=terminal_states.index,
+                                 n_jobs=4)
+
+pr_res.branch_probs.columns = terminal_states[pr_res.branch_probs.columns]
+gene_trends = palantir.presults.compute_gene_trends(pr_res, normal[:, genes].to_df().loc[:, genes])
+startCell = lrMDS[lrMDS.obs['assignCl1'] == 'HSC+MPP', 'AVP'].to_df().sort_values(['AVP'], ascending=False).head(1).index[0]
+ery = lrMDS[lrMDS.obs['assignCl1'] == 'Late Erythroblast', 'GYPA'].to_df().sort_values(['GYPA'], ascending=False).head(1).index[0]
+terminal_states = pd.Series(['Late Erythroblast'], index=[ery])
+
+pr_resLR = sce.tl.palantir_results(lrMDS, early_cell=startCell, 
+                                 ms_data='X_palantir_multiscale', num_waypoints=500, 
+                                 terminal_states=terminal_states.index,
+                                 n_jobs=4)
+
+pr_resLR.branch_probs.columns = terminal_states[pr_resLR.branch_probs.columns]
+gene_trends = palantir.presults.compute_gene_trends(pr_resLR, lrMDS[:, genes].to_df().loc[:, genes])
+startCell = aml[aml.obs['assignCl1'] == 'HSC+MPP', 'AVP'].to_df().sort_values(['AVP'], ascending=False).head(1).index[0]
+ery = aml[aml.obs['assignCl1'] == 'Late Erythroblast', 'GYPA'].to_df().sort_values(['GYPA'], ascending=False).head(1).index[0]
+terminal_states = pd.Series(['Late Erythroblast'], index=[ery])
+pr_aml = sce.tl.palantir_results(aml, early_cell=startCell, 
+                                 ms_data='X_palantir_multiscale', num_waypoints=500, 
+                                 terminal_states=terminal_states.index,
+                                 n_jobs=4)
+
+pr_aml.branch_probs.columns = terminal_states[pr_aml.branch_probs.columns]
+gene_trends = palantir.presults.compute_gene_trends(pr_aml, aml[:, genes].to_df().loc[:, genes])
+for i in genes:
+    palantir.plot.plot_gene_trends(gene_trends, [i])
+    fig = plt.gcf()
+    fig.savefig(f'palantre2/aml/{i}.pdf')
